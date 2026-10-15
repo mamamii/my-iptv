@@ -87,14 +87,6 @@ for i in range(len(lines)):
     info = lines[i]
     url = lines[i + 1]
 
-    if KEEP:
-
-        if not any(
-            keyword.lower() in info.lower()
-            for keyword in KEEP
-        ):
-            continue
-
     total += 1
 
     print(f"[{total}] 检测: {info}")
