@@ -1,36 +1,88 @@
 import requests
 import subprocess
 import json
-import time
-from pathlib import Path
+import re
 
-SOURCE = "https://iptv-org.github.io/iptv/countries/cn.m3u"
+from concurrent.futures import (
+    ThreadPoolExecutor,
+    as_completed
+)
 
-TIMEOUT = 15
+# ==========================================
+# 配置
+# ==========================================
 
-KEEP = []
+THREADS = 32
 
-keep_file = Path("stable_channels.txt")
+HTTP_TIMEOUT = 3
 
-if keep_file.exists():
-    KEEP = [
-        line.strip()
-        for line in keep_file.read_text(
-            encoding="utf-8"
-        ).splitlines()
-        if line.strip()
-    ]
+FFPROBE_TIMEOUT = 5
+
+HEADERS = {
+    "User-Agent": "Mozilla/5.0"
+}
+
+SOURCES = {
+    "大陆": "https://iptv-org.github.io/iptv/countries/cn.m3u",
+    "香港": "https://iptv-org.github.io/iptv/countries/hk.m3u",
+    "澳门": "https://iptv-org.github.io/iptv/countries/mo.m3u",
+    "台湾": "https://iptv-org.github.io/iptv/countries/tw.m3u"
+}
+
+# ==========================================
+# 工具
+# ==========================================
+
+def normalize_name(name):
+
+    name = re.sub(r"\s+", "", name)
+
+    for word in [
+        "HD",
+        "hd",
+        "高清",
+        "超清",
+        "4K",
+        "4k"
+    ]:
+        name = name.replace(word, "")
+
+    return name.strip()
 
 
-def probe_stream(url):
+def fast_http_check(url):
+
+    try:
+
+        r = requests.get(
+            url,
+            timeout=HTTP_TIMEOUT,
+            stream=True,
+            headers=HEADERS,
+            allow_redirects=True
+        )
+
+        if r.status_code != 200:
+            return False
+
+        return True
+
+    except:
+        return False
+
+
+def ffprobe_check(url):
 
     try:
 
         cmd = [
             "ffprobe",
-            "-v", "error",
-            "-show_streams",
-            "-of", "json",
+            "-v",
+            "error",
+            "-show_entries",
+            "stream=codec_type",
+            "-of",
+            "json",
             url
         ]
 
@@ -38,7 +90,7 @@ def probe_stream(url):
             cmd,
             capture_output=True,
             text=True,
-            timeout=TIMEOUT
+            timeout=FFPROBE_TIMEOUT
         )
 
         if not result.stdout:
@@ -46,73 +98,228 @@ def probe_stream(url):
 
         data = json.loads(result.stdout)
 
-        streams = data.get("streams", [])
+        streams = data.get(
+            "streams",
+            []
+        )
 
-        for s in streams:
+        for stream in streams:
 
-            if s.get("codec_type") == "video":
+            if (
+                stream.get("codec_type")
+                == "video"
+            ):
                 return True
 
         return False
 
-    except Exception:
+    except:
         return False
 
 
-print("下载源...")
+def detect_channel(channel):
 
-text = requests.get(
-    SOURCE,
-    timeout=30,
-    headers={
-        "User-Agent": "Mozilla/5.0"
-    }
-).text
+    region, info, url = channel
 
-lines = text.splitlines()
+    if not fast_http_check(url):
+        return None
 
-clean = ["#EXTM3U"]
+    if not ffprobe_check(url):
+        return None
 
-total = 0
-success = 0
+    return (
+        region,
+        info,
+        url
+    )
 
-for i in range(len(lines)):
+# ==========================================
+# 收集频道
+# ==========================================
 
-    if not lines[i].startswith("#EXTINF"):
+channels = []
+
+seen = set()
+
+for region, source in SOURCES.items():
+
+    print(f"\n下载 {region}")
+
+    try:
+
+        text = requests.get(
+            source,
+            timeout=30,
+            headers=HEADERS
+        ).text
+
+    except Exception as e:
+
+        print(e)
+
         continue
 
-    if i + 1 >= len(lines):
-        continue
+    lines = text.splitlines()
 
-    info = lines[i]
-    url = lines[i + 1]
+    i = 0
 
-    total += 1
+    while i < len(lines):
 
-    print(f"[{total}] 检测: {info}")
+        line = lines[i]
 
-    ok = probe_stream(url)
+        if (
+            line.startswith("#EXTINF")
+            and i + 1 < len(lines)
+        ):
 
-    if ok:
+            info = line.strip()
+            url = lines[i + 1].strip()
 
-        success += 1
+            name = info.split(",")[-1]
 
-        clean.append(info)
-        clean.append(url)
+            key = normalize_name(name)
 
-        print("✅ 通过")
+            if key not in seen:
 
-    else:
+                seen.add(key)
 
-        print("❌ 失效")
+                channels.append(
+                    (
+                        region,
+                        info,
+                        url
+                    )
+                )
 
-    time.sleep(0.5)
+        i += 1
 
-Path("cleaned.m3u").write_text(
-    "\n".join(clean),
-    encoding="utf-8"
+print(
+    "\n总频道数:",
+    len(channels)
 )
 
-print()
-print(f"总检测: {total}")
-print(f"有效: {success}")
+# ==========================================
+# 并发检测
+# ==========================================
+
+valid = {
+    "大陆": [],
+    "香港": [],
+    "澳门": [],
+    "台湾": []
+}
+
+checked = 0
+
+with ThreadPoolExecutor(
+    max_workers=THREADS
+) as executor:
+
+    futures = [
+        executor.submit(
+            detect_channel,
+            ch
+        )
+        for ch in channels
+    ]
+
+    for future in as_completed(
+        futures
+    ):
+
+        checked += 1
+
+        if checked % 20 == 0:
+            print(
+                f"进度 {checked}/{len(channels)}"
+            )
+
+        result = future.result()
+
+        if result:
+
+            region, info, url = result
+
+            if 'group-title="' in info:
+
+                info = re.sub(
+                    r'group-title="[^"]*"',
+                    f'group-title="{region}"',
+                    info
+                )
+
+            else:
+
+                info = info.replace(
+                    "#EXTINF:-1",
+                    f'#EXTINF:-1 group-title="{region}"'
+                )
+
+            valid[
+                region
+            ].append(
+                (
+                    info,
+                    url
+                )
+            )
+
+# ==========================================
+# 排序
+# ==========================================
+
+for region in valid:
+
+    valid[region].sort(
+        key=lambda x: x[0]
+    )
+
+# ==========================================
+# 输出M3U
+# ==========================================
+
+m3u = [
+    "#EXTM3U"
+]
+
+for region in [
+    "大陆",
+    "香港",
+    "澳门",
+    "台湾"
+]:
+
+    m3u.append("")
+    m3u.append(
+        f"# ===== {region} ====="
+    )
+
+    for info, url in valid[region]:
+
+        m3u.append(info)
+        m3u.append(url)
+
+with open(
+    "cleaned.m3u",
+    "w",
+    encoding="utf-8"
+) as f:
+
+    f.write(
+        "\n".join(m3u)
+    )
+
+total_valid = sum(
+    len(v)
+    for v in valid.values()
+)
+
+print("\n完成")
+print("有效频道:", total_valid)
+
+for region in valid:
+
+    print(
+        region,
+        len(valid[region])
+    )
