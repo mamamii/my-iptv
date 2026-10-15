@@ -9,16 +9,13 @@ on:
 permissions:
   contents: write
 
-concurrency:
-  group: iptv-cleaner
-  cancel-in-progress: true
-
 jobs:
+
   build:
 
     runs-on: ubuntu-latest
 
-    timeout-minutes: 15
+    timeout-minutes: 10
 
     steps:
 
@@ -30,19 +27,6 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Cache pip
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/pip
-          key: pip-${{ runner.os }}-${{ hashFiles('requirements.txt') }}
-          restore-keys: |
-            pip-${{ runner.os }}-
-
-      - name: Install FFmpeg
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y ffmpeg
-
       - name: Install Dependencies
         run: |
           python -m pip install --upgrade pip
@@ -52,12 +36,12 @@ jobs:
         run: |
           python check.py
 
-      - name: Verify Output
+      - name: Verify
         run: |
           test -f cleaned.m3u
-          ls -lh cleaned.m3u
+          wc -l cleaned.m3u
 
-      - name: Commit Changes
+      - name: Commit
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -66,15 +50,9 @@ jobs:
 
           git diff --cached --quiet && exit 0
 
-          git commit -m "Auto Update IPTV"
+          git commit -m "update m3u"
 
-      - name: Push Changes
+      - name: Push
         uses: ad-m/github-push-action@master
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Upload Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: cleaned-playlist
-          path: cleaned.m3u
