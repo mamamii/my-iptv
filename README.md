@@ -176,16 +176,20 @@ HTTP 200
 当前配置：
 
 ```python
-THREADS = 32
+THREADS = 64
 
 HTTP_TIMEOUT = (3, 5)
+
+TIME_BUDGET = 450
 
 MIN_VALID_CHANNELS = 10
 ```
 
 特点：
 
-- 多线程并发检测
+- 64 线程并发检测
+- 每线程复用 HTTP 连接池，减少握手开销
+- 检测时间预算 450 秒，超时保留已完成结果
 - 自动去重
 - 优先淘汰无效频道
 

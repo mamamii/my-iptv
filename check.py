@@ -1,15 +1,23 @@
 import os
 import re
 import sys
+import threading
 
 import requests
 
 from urllib.parse import urljoin
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from requests.adapters import HTTPAdapter
+from concurrent.futures import (
+    ThreadPoolExecutor,
+    as_completed,
+    TimeoutError as FuturesTimeoutError
+)
 
-THREADS = 32
+THREADS = 64
 
 HTTP_TIMEOUT = (3, 5)
+
+TIME_BUDGET = 450
 
 MIN_VALID_CHANNELS = 10
 
@@ -28,6 +36,34 @@ OUTPUT_PATH = os.path.join(
     os.path.dirname(os.path.abspath(__file__)),
     "cleaned.m3u"
 )
+
+_thread_local = threading.local()
+
+
+def session():
+
+    s = getattr(
+        _thread_local,
+        "session",
+        None
+    )
+
+    if s is None:
+
+        s = requests.Session()
+        s.headers.update(HEADERS)
+
+        adapter = HTTPAdapter(
+            pool_connections=8,
+            pool_maxsize=8
+        )
+
+        s.mount("http://", adapter)
+        s.mount("https://", adapter)
+
+        _thread_local.session = s
+
+    return s
 
 
 def normalize(name):
@@ -51,9 +87,8 @@ def fetch_text(url, timeout=HTTP_TIMEOUT):
 
     try:
 
-        r = requests.get(
+        r = session().get(
             url,
-            headers=HEADERS,
             timeout=timeout
         )
 
@@ -113,9 +148,8 @@ def test_hls_stream(url, depth=0):
 
     try:
 
-        with requests.get(
+        with session().get(
             segment_url,
-            headers=HEADERS,
             timeout=HTTP_TIMEOUT,
             stream=True
         ) as r:
@@ -217,17 +251,32 @@ valid = {
     "台湾": []
 }
 
-with ThreadPoolExecutor(max_workers=THREADS) as pool:
+pool = ThreadPoolExecutor(max_workers=THREADS)
 
-    futures = [
-        pool.submit(
-            detect,
-            ch
-        )
-        for ch in channels
-    ]
+futures = [
+    pool.submit(
+        detect,
+        ch
+    )
+    for ch in channels
+]
 
-    for future in as_completed(futures):
+finished = 0
+
+try:
+
+    for future in as_completed(
+        futures,
+        timeout=TIME_BUDGET
+    ):
+
+        finished += 1
+
+        if finished % 100 == 0:
+            print(
+                "已检测:",
+                finished
+            )
 
         result = future.result()
 
@@ -256,6 +305,25 @@ with ThreadPoolExecutor(max_workers=THREADS) as pool:
                     url
                 )
             )
+
+except FuturesTimeoutError:
+
+    print(
+        "达到时间预算，未完成的检测跳过"
+    )
+
+for future in futures:
+
+    future.cancel()
+
+pool.shutdown(wait=False)
+
+print(
+    "检测完成:",
+    finished,
+    "/",
+    len(futures)
+)
 
 m3u = ["#EXTM3U"]
 
