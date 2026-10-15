@@ -1,10 +1,11 @@
 # IPTV Cleaner
 
-基于 IPTV-ORG 的自动检测与筛选方案。
+基于 IPTV-ORG + 范明明(fanmingming/live) 双数据源的自动检测与筛选方案。
 
 功能：
 
 - 自动获取 IPTV-ORG 中国大陆频道
+- 自动获取 范明明 大陆精选源（央视+卫视）
 - 自动获取 IPTV-ORG 香港频道
 - 自动获取 IPTV-ORG 澳门频道
 - 自动获取 IPTV-ORG 台湾频道
@@ -34,11 +35,15 @@
 
 # 数据来源
 
-项目使用 IPTV-ORG 官方公开播放列表：
+项目使用 IPTV-ORG 官方公开播放列表，并叠加 范明明(fanmingming/live) 维护的大陆精选源：
 
-中国大陆
+中国大陆（IPTV-ORG）
 
 https://iptv-org.github.io/iptv/countries/cn.m3u
+
+中国大陆（范明明，含央视高清+各省卫视）
+
+https://raw.githubusercontent.com/fanmingming/live/main/tv/m3u/index.m3u
 
 香港
 
@@ -66,6 +71,8 @@ IPTV-ORG
 HTTP检测
     ↓
 视频分片检测
+    ↓
+补救检测（放宽超时重测失败频道）
     ↓
 输出有效频道
     ↓
@@ -155,10 +162,29 @@ HTTP 200
 
 ```text
 HTTP 200
-首块数据 >= 3000 字节
+首块数据 >= 1000 字节
 且内容为真实视频数据
 （TS 同步字节 0x47 或 fMP4 ftyp 头）
 ```
+
+播放列表请求失败会自动重试一次，
+容忍网络抖动。
+
+---
+
+# 补救检测
+
+首轮失败或未完成的频道，
+使用更宽松的超时 (6, 12) 重测一轮：
+
+```text
+时间预算 240 秒
+单频道预算翻倍至 40 秒
+```
+
+死链会快速失败，
+慢速但有效的频道在这一轮被捞回，
+大幅减少跨国网络造成的误杀。
 
 满足条件：
 
@@ -181,20 +207,28 @@ HTTP 200
 ```python
 THREADS = 64
 
-HTTP_TIMEOUT = (3, 3)
+HTTP_TIMEOUT = (4, 6)
+
+RESCUE_TIMEOUT = (6, 12)
 
 PER_CHANNEL_BUDGET = 20
 
 TIME_BUDGET = 450
 
+RESCUE_BUDGET = 240
+
 MIN_VALID_CHANNELS = 10
+
+MIN_SEGMENT_BYTES = 1000
 ```
 
 特点：
 
 - 64 线程并发检测
 - 每线程复用 HTTP 连接池，减少握手开销
-- 检测时间预算 450 秒，超时保留已完成结果
+- 首轮检测预算 450 秒，超时保留已完成结果
+- 失败频道放宽超时补救重测一轮，减少误杀
+- 播放列表请求失败自动重试一次
 - 自动去重
 - 优先淘汰无效频道
 
