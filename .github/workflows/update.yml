@@ -1,20 +1,24 @@
 name: IPTV Cleaner
 
 on:
-
   workflow_dispatch:
 
   schedule:
-    - cron: "0 */12 * * *"
+    - cron: "0 22,10 * * *"
 
 permissions:
   contents: write
 
-jobs:
+concurrency:
+  group: iptv-cleaner
+  cancel-in-progress: true
 
+jobs:
   build:
 
     runs-on: ubuntu-latest
+
+    timeout-minutes: 15
 
     steps:
 
@@ -26,30 +30,51 @@ jobs:
         with:
           python-version: "3.11"
 
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: pip-${{ runner.os }}-${{ hashFiles('requirements.txt') }}
+          restore-keys: |
+            pip-${{ runner.os }}-
+
       - name: Install FFmpeg
         run: |
-          sudo apt update
-          sudo apt install -y ffmpeg
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
 
-      - name: Install Requests
+      - name: Install Dependencies
         run: |
-          pip install requests
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
 
       - name: Run Checker
         run: |
           python check.py
 
+      - name: Verify Output
+        run: |
+          test -f cleaned.m3u
+          ls -lh cleaned.m3u
+
       - name: Commit Changes
         run: |
-          git config user.name github-actions
-          git config user.email github-actions@github.com
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
           git add cleaned.m3u
 
-          git diff --cached --quiet || \
-          git commit -m "update playlist"
+          git diff --cached --quiet && exit 0
 
-      - name: Push
+          git commit -m "Auto Update IPTV"
+
+      - name: Push Changes
         uses: ad-m/github-push-action@master
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: cleaned-playlist
+          path: cleaned.m3u
