@@ -1,12 +1,17 @@
-import requests
+import os
 import re
+import sys
+
+import requests
 
 from urllib.parse import urljoin
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 THREADS = 32
 
-HTTP_TIMEOUT = 5
+HTTP_TIMEOUT = (3, 5)
+
+MIN_VALID_CHANNELS = 10
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0"
@@ -18,6 +23,11 @@ SOURCES = {
     "澳门": "https://iptv-org.github.io/iptv/countries/mo.m3u",
     "台湾": "https://iptv-org.github.io/iptv/countries/tw.m3u"
 }
+
+OUTPUT_PATH = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)),
+    "cleaned.m3u"
+)
 
 
 def normalize(name):
@@ -37,85 +47,95 @@ def normalize(name):
     return name
 
 
-def fetch_text(url):
+def fetch_text(url, timeout=HTTP_TIMEOUT):
 
     try:
 
         r = requests.get(
             url,
             headers=HEADERS,
-            timeout=HTTP_TIMEOUT
+            timeout=timeout
         )
 
-        if r.status_code == 200:
-            return r.text
+        if r.status_code != 200:
+            return None
 
-    except:
-        pass
+        r.encoding = "utf-8"
 
-    return None
+        return r.text
+
+    except requests.RequestException:
+
+        return None
 
 
-def test_hls_stream(url):
+def test_hls_stream(url, depth=0):
+
+    if depth > 2:
+        return False
+
+    playlist = fetch_text(url)
+
+    if not playlist:
+        return False
+
+    if "#EXTM3U" not in playlist:
+        return False
+
+    segment = None
+
+    for line in playlist.splitlines():
+
+        line = line.strip()
+
+        if not line:
+            continue
+
+        if line.startswith("#"):
+            continue
+
+        segment = line
+        break
+
+    if not segment:
+        return False
+
+    segment_url = urljoin(
+        url,
+        segment
+    )
+
+    if segment_url.lower().endswith(".m3u8"):
+        return test_hls_stream(
+            segment_url,
+            depth + 1
+        )
 
     try:
 
-        playlist = fetch_text(url)
-
-        if not playlist:
-            return False
-
-        if "#EXTM3U" not in playlist:
-            return False
-
-        segment = None
-
-        lines = playlist.splitlines()
-
-        for line in lines:
-
-            line = line.strip()
-
-            if not line:
-                continue
-
-            if line.startswith("#"):
-                continue
-
-            segment = line
-            break
-
-        if not segment:
-            return False
-
-        segment_url = urljoin(
-            url,
-            segment
-        )
-
-        r = requests.get(
+        with requests.get(
             segment_url,
             headers=HEADERS,
             timeout=HTTP_TIMEOUT,
             stream=True
-        )
+        ) as r:
 
-        if r.status_code != 200:
-            return False
+            if r.status_code != 200:
+                return False
 
-        content = next(
-            r.iter_content(
-                chunk_size=188 * 20
-            ),
-            b""
-        )
+            content = next(
+                r.iter_content(
+                    chunk_size=188 * 20
+                ),
+                b""
+            )
 
         if len(content) < 3000:
             return False
 
         return True
 
-    except:
+    except requests.RequestException:
 
         return False
 
@@ -137,21 +157,19 @@ def detect(channel):
 
 channels = []
 
+# 跨地区去重：同一频道只保留在最先出现的地区（有意为之）
 seen = set()
 
 for region, source in SOURCES.items():
 
     print("加载:", region)
 
-    try:
+    text = fetch_text(
+        source,
+        timeout=30
+    )
 
-        text = requests.get(
-            source,
-            headers=HEADERS,
-            timeout=30
-        ).text
-
-    except:
+    if not text:
         continue
 
     lines = text.splitlines()
@@ -167,9 +185,15 @@ for region, source in SOURCES.items():
         info = lines[i].strip()
         url = lines[i + 1].strip()
 
+        if not url.startswith("http"):
+            continue
+
         name = info.split(",")[-1]
 
         key = normalize(name)
+
+        if not key:
+            continue
 
         if key in seen:
             continue
@@ -254,15 +278,27 @@ for region in [
         m3u.append(info)
         m3u.append(url)
 
+total = sum(len(v) for v in valid.values())
+
+if total < MIN_VALID_CHANNELS:
+
+    print(
+        "有效频道过少，疑似检测异常，放弃写入:",
+        total
+    )
+
+    sys.exit(1)
+
 with open(
-    "cleaned.m3u",
+    OUTPUT_PATH,
     "w",
-    encoding="utf-8"
+    encoding="utf-8",
+    newline="\n"
 ) as f:
 
-    f.write("\n".join(m3u))
+    f.write("\n".join(m3u) + "\n")
 
 print(
     "有效频道:",
-    sum(len(v) for v in valid.values())
+    total
 )

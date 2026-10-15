@@ -65,7 +65,7 @@ IPTV-ORG
     ↓
 HTTP检测
     ↓
-FFprobe检测
+视频分片检测
     ↓
 输出有效频道
     ↓
@@ -143,22 +143,27 @@ HTTP 200
 第二阶段：
 
 ```text
-FFprobe
+视频分片检测
 ```
 
-判断是否存在：
+解析 m3u8 播放列表，
+取第一个分片并实际下载首块数据
+（多码率 Master 列表会自动向下解析一层）。
+
+判断：
 
 ```text
-Video Stream
+HTTP 200
+且首块数据 >= 3000 字节
 ```
 
-存在视频流：
+满足条件：
 
 ```text
 保留
 ```
 
-无视频流：
+不满足：
 
 ```text
 剔除
@@ -173,9 +178,9 @@ Video Stream
 ```python
 THREADS = 32
 
-HTTP_TIMEOUT = 3
+HTTP_TIMEOUT = (3, 5)
 
-FFPROBE_TIMEOUT = 5
+MIN_VALID_CHANNELS = 10
 ```
 
 特点：
@@ -308,6 +313,18 @@ https://raw.githubusercontent.com/abc/iptv-cleaner/main/cleaned.m3u
 检测失败
 ↓
 删除
+```
+
+保护机制：
+
+```text
+有效频道总数低于 10
+↓
+判定为检测异常
+↓
+放弃写入并退出
+↓
+保留上一版本 cleaned.m3u
 ```
 
 后续计划：

@@ -9,6 +9,10 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: iptv-cleaner
+  cancel-in-progress: false
+
 jobs:
 
   build:
@@ -53,6 +57,4 @@ jobs:
           git commit -m "update m3u"
 
       - name: Push
-        uses: ad-m/github-push-action@master
-        with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
+        run: git push
