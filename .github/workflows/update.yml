@@ -1,10 +1,11 @@
 name: IPTV Cleaner
 
+# 定时任务已停用：海外 runner 受地域限制，
+# 大量国内频道无法连通导致误杀，
+# 日常检测改由本机 Windows 任务计划执行（run_local.ps1），
+# 此处保留手动触发作为备用
 on:
   workflow_dispatch:
-
-  schedule:
-    - cron: "0 22,10 * * *"
 
 permissions:
   contents: write

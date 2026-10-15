@@ -63,11 +63,17 @@ OUTPUT_PATH = os.path.join(
 _thread_local = threading.local()
 
 
-def session():
+def session(direct=False):
+
+    key = (
+        "session_direct"
+        if direct
+        else "session"
+    )
 
     s = getattr(
         _thread_local,
-        "session",
+        key,
         None
     )
 
@@ -75,6 +81,12 @@ def session():
 
         s = requests.Session()
         s.headers.update(HEADERS)
+
+        if direct:
+
+            # 测流直连，绕开系统代理，
+            # 避免流量绕行海外被地域限制
+            s.trust_env = False
 
         adapter = HTTPAdapter(
             pool_connections=8,
@@ -84,7 +96,11 @@ def session():
         s.mount("http://", adapter)
         s.mount("https://", adapter)
 
-        _thread_local.session = s
+        setattr(
+            _thread_local,
+            key,
+            s
+        )
 
     return s
 
@@ -106,11 +122,17 @@ def normalize(name):
     return name
 
 
-def fetch_text(url, timeout=HTTP_TIMEOUT):
+def fetch_text(
+    url,
+    timeout=HTTP_TIMEOUT,
+    direct=False
+):
 
     try:
 
-        r = session().get(
+        r = session(
+            direct=direct
+        ).get(
             url,
             timeout=timeout
         )
@@ -161,7 +183,8 @@ def test_hls_stream(
 
     playlist = fetch_text(
         url,
-        timeout=timeout
+        timeout=timeout,
+        direct=True
     )
 
     if playlist is None and depth == 0:
@@ -171,7 +194,8 @@ def test_hls_stream(
 
         playlist = fetch_text(
             url,
-            timeout=timeout
+            timeout=timeout,
+            direct=True
         )
 
     if not playlist:
@@ -225,7 +249,9 @@ def test_hls_stream(
 
     try:
 
-        with session().get(
+        with session(
+            direct=True
+        ).get(
             segment_url,
             timeout=timeout,
             stream=True
@@ -368,6 +394,15 @@ for region, source in SOURCES:
         source,
         timeout=30
     )
+
+    if not text:
+
+        # 代理不可用时尝试直连
+        text = fetch_text(
+            source,
+            timeout=30,
+            direct=True
+        )
 
     if not text:
         continue

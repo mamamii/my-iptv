@@ -234,9 +234,13 @@ MIN_SEGMENT_BYTES = 1000
 
 ---
 
-# GitHub Actions
+# 检测方式（本地为主）
 
-自动运行时间：
+GitHub Actions 海外 runner 受地域限制，
+大量国内频道无法连通会被误杀，
+其定时任务已停用（保留手动触发备用）。
+
+日常更新由本机 Windows 任务计划执行：
 
 ```text
 北京时间
@@ -244,7 +248,34 @@ MIN_SEGMENT_BYTES = 1000
 18:00
 ```
 
-也可以手动运行：
+本机检测时视频流请求走直连
+（自动绕开系统代理，避免流量绕行海外），
+抓取源列表时才走代理。
+
+## 本机手动运行
+
+```text
+python -u check.py
+```
+
+## 注册定时任务
+
+```text
+schtasks /Create /F /TN "IPTV-Cleaner" /SC HOURLY /MO 12 /ST 06:00 /TR "powershell -NoProfile -ExecutionPolicy Bypass -File D:\doai\my-iptv\run_local.ps1"
+```
+
+/SC HOURLY /MO 12 /ST 06:00
+表示每天 06:00 和 18:00 各运行一次。
+
+## 删除定时任务
+
+```text
+schtasks /Delete /TN "IPTV-Cleaner"
+```
+
+# GitHub Actions（备用）
+
+手动运行：
 
 ```text
 Actions
