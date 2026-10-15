@@ -19,7 +19,7 @@ jobs:
 
     runs-on: ubuntu-latest
 
-    timeout-minutes: 10
+    timeout-minutes: 15
 
     steps:
 
@@ -38,7 +38,7 @@ jobs:
 
       - name: Run Checker
         run: |
-          python check.py
+          python -u check.py
 
       - name: Verify
         run: |

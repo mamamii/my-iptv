@@ -21,6 +21,10 @@ TIME_BUDGET = 450
 
 MIN_VALID_CHANNELS = 10
 
+sys.stdout.reconfigure(
+    line_buffering=True
+)
+
 HEADERS = {
     "User-Agent": "Mozilla/5.0"
 }
@@ -355,7 +359,9 @@ if total < MIN_VALID_CHANNELS:
         total
     )
 
-    sys.exit(1)
+    sys.stdout.flush()
+
+    os._exit(1)
 
 with open(
     OUTPUT_PATH,
@@ -370,3 +376,7 @@ print(
     "有效频道:",
     total
 )
+
+sys.stdout.flush()
+
+os._exit(0)
