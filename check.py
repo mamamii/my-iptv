@@ -1,22 +1,12 @@
 import requests
-import subprocess
-import json
 import re
 
-from concurrent.futures import (
-    ThreadPoolExecutor,
-    as_completed
-)
-
-# ==========================================
-# 配置
-# ==========================================
+from urllib.parse import urljoin
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 THREADS = 32
 
-HTTP_TIMEOUT = 3
-
-FFPROBE_TIMEOUT = 5
+HTTP_TIMEOUT = 5
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0"
@@ -29,113 +19,121 @@ SOURCES = {
     "台湾": "https://iptv-org.github.io/iptv/countries/tw.m3u"
 }
 
-# ==========================================
-# 工具
-# ==========================================
 
-def normalize_name(name):
+def normalize(name):
 
     name = re.sub(r"\s+", "", name)
 
-    for word in [
+    for x in [
         "HD",
         "hd",
-        "高清",
-        "超清",
         "4K",
-        "4k"
+        "4k",
+        "高清",
+        "超清"
     ]:
-        name = name.replace(word, "")
+        name = name.replace(x, "")
 
-    return name.strip()
+    return name
 
 
-def fast_http_check(url):
+def fetch_text(url):
 
     try:
 
         r = requests.get(
             url,
-            timeout=HTTP_TIMEOUT,
-            stream=True,
             headers=HEADERS,
-            allow_redirects=True
+            timeout=HTTP_TIMEOUT
+        )
+
+        if r.status_code == 200:
+            return r.text
+
+    except:
+        pass
+
+    return None
+
+
+def test_hls_stream(url):
+
+    try:
+
+        playlist = fetch_text(url)
+
+        if not playlist:
+            return False
+
+        if "#EXTM3U" not in playlist:
+            return False
+
+        segment = None
+
+        lines = playlist.splitlines()
+
+        for line in lines:
+
+            line = line.strip()
+
+            if not line:
+                continue
+
+            if line.startswith("#"):
+                continue
+
+            segment = line
+            break
+
+        if not segment:
+            return False
+
+        segment_url = urljoin(
+            url,
+            segment
+        )
+
+        r = requests.get(
+            segment_url,
+            headers=HEADERS,
+            timeout=HTTP_TIMEOUT,
+            stream=True
         )
 
         if r.status_code != 200:
             return False
 
+        content = next(
+            r.iter_content(
+                chunk_size=188 * 20
+            ),
+            b""
+        )
+
+        if len(content) < 3000:
+            return False
+
         return True
 
     except:
-        return False
-
-
-def ffprobe_check(url):
-
-    try:
-
-        cmd = [
-            "ffprobe",
-            "-v",
-            "error",
-            "-show_entries",
-            "stream=codec_type",
-            "-of",
-            "json",
-            url
-        ]
-
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=FFPROBE_TIMEOUT
-        )
-
-        if not result.stdout:
-            return False
-
-        data = json.loads(result.stdout)
-
-        streams = data.get(
-            "streams",
-            []
-        )
-
-        for stream in streams:
-
-            if (
-                stream.get("codec_type")
-                == "video"
-            ):
-                return True
 
         return False
 
-    except:
-        return False
 
-
-def detect_channel(channel):
+def detect(channel):
 
     region, info, url = channel
 
-    if not fast_http_check(url):
-        return None
+    if test_hls_stream(url):
 
-    if not ffprobe_check(url):
-        return None
+        return (
+            region,
+            info,
+            url
+        )
 
-    return (
-        region,
-        info,
-        url
-    )
+    return None
 
-# ==========================================
-# 收集频道
-# ==========================================
 
 channels = []
 
@@ -143,64 +141,50 @@ seen = set()
 
 for region, source in SOURCES.items():
 
-    print(f"\n下载 {region}")
+    print("加载:", region)
 
     try:
 
         text = requests.get(
             source,
-            timeout=30,
-            headers=HEADERS
+            headers=HEADERS,
+            timeout=30
         ).text
 
-    except Exception as e:
-
-        print(e)
-
+    except:
         continue
 
     lines = text.splitlines()
 
-    i = 0
+    for i in range(len(lines)):
 
-    while i < len(lines):
+        if not lines[i].startswith("#EXTINF"):
+            continue
 
-        line = lines[i]
+        if i + 1 >= len(lines):
+            continue
 
-        if (
-            line.startswith("#EXTINF")
-            and i + 1 < len(lines)
-        ):
+        info = lines[i].strip()
+        url = lines[i + 1].strip()
 
-            info = line.strip()
-            url = lines[i + 1].strip()
+        name = info.split(",")[-1]
 
-            name = info.split(",")[-1]
+        key = normalize(name)
 
-            key = normalize_name(name)
+        if key in seen:
+            continue
 
-            if key not in seen:
+        seen.add(key)
 
-                seen.add(key)
+        channels.append(
+            (
+                region,
+                info,
+                url
+            )
+        )
 
-                channels.append(
-                    (
-                        region,
-                        info,
-                        url
-                    )
-                )
-
-        i += 1
-
-print(
-    "\n总频道数:",
-    len(channels)
-)
-
-# ==========================================
-# 并发检测
-# ==========================================
+print("待检测:", len(channels))
 
 valid = {
     "大陆": [],
@@ -209,30 +193,17 @@ valid = {
     "台湾": []
 }
 
-checked = 0
-
-with ThreadPoolExecutor(
-    max_workers=THREADS
-) as executor:
+with ThreadPoolExecutor(max_workers=THREADS) as pool:
 
     futures = [
-        executor.submit(
-            detect_channel,
+        pool.submit(
+            detect,
             ch
         )
         for ch in channels
     ]
 
-    for future in as_completed(
-        futures
-    ):
-
-        checked += 1
-
-        if checked % 20 == 0:
-            print(
-                f"进度 {checked}/{len(channels)}"
-            )
+    for future in as_completed(futures):
 
         result = future.result()
 
@@ -255,32 +226,14 @@ with ThreadPoolExecutor(
                     f'#EXTINF:-1 group-title="{region}"'
                 )
 
-            valid[
-                region
-            ].append(
+            valid[region].append(
                 (
                     info,
                     url
                 )
             )
 
-# ==========================================
-# 排序
-# ==========================================
-
-for region in valid:
-
-    valid[region].sort(
-        key=lambda x: x[0]
-    )
-
-# ==========================================
-# 输出M3U
-# ==========================================
-
-m3u = [
-    "#EXTM3U"
-]
+m3u = ["#EXTM3U"]
 
 for region in [
     "大陆",
@@ -294,6 +247,8 @@ for region in [
         f"# ===== {region} ====="
     )
 
+    valid[region].sort()
+
     for info, url in valid[region]:
 
         m3u.append(info)
@@ -305,21 +260,9 @@ with open(
     encoding="utf-8"
 ) as f:
 
-    f.write(
-        "\n".join(m3u)
-    )
+    f.write("\n".join(m3u))
 
-total_valid = sum(
-    len(v)
-    for v in valid.values()
+print(
+    "有效频道:",
+    sum(len(v) for v in valid.values())
 )
-
-print("\n完成")
-print("有效频道:", total_valid)
-
-for region in valid:
-
-    print(
-        region,
-        len(valid[region])
-    )
