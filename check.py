@@ -2,10 +2,14 @@ import os
 import re
 import sys
 import threading
+import time
 
 import requests
 
-from urllib.parse import urljoin
+from urllib.parse import (
+    urljoin,
+    urlsplit
+)
 from requests.adapters import HTTPAdapter
 from concurrent.futures import (
     ThreadPoolExecutor,
@@ -15,7 +19,9 @@ from concurrent.futures import (
 
 THREADS = 64
 
-HTTP_TIMEOUT = (3, 5)
+HTTP_TIMEOUT = (3, 3)
+
+PER_CHANNEL_BUDGET = 20
 
 TIME_BUDGET = 450
 
@@ -108,9 +114,23 @@ def fetch_text(url, timeout=HTTP_TIMEOUT):
         return None
 
 
-def test_hls_stream(url, depth=0):
+def test_hls_stream(
+    url,
+    depth=0,
+    deadline=None
+):
+
+    if deadline is None:
+
+        deadline = (
+            time.monotonic()
+            + PER_CHANNEL_BUDGET
+        )
 
     if depth > 2:
+        return False
+
+    if time.monotonic() > deadline:
         return False
 
     playlist = fetch_text(url)
@@ -120,6 +140,11 @@ def test_hls_stream(url, depth=0):
 
     if "#EXTM3U" not in playlist:
         return False
+
+    is_master = (
+        "#EXT-X-STREAM-INF"
+        in playlist
+    )
 
     segment = None
 
@@ -144,10 +169,18 @@ def test_hls_stream(url, depth=0):
         segment
     )
 
-    if segment_url.lower().endswith(".m3u8"):
+    path = urlsplit(
+        segment_url
+    ).path.lower()
+
+    if (
+        is_master
+        or path.endswith(".m3u8")
+    ):
         return test_hls_stream(
             segment_url,
-            depth + 1
+            depth + 1,
+            deadline
         )
 
     try:
@@ -167,6 +200,24 @@ def test_hls_stream(url, depth=0):
                 ),
                 b""
             )
+
+        if b"#EXTM3U" in content[:200]:
+            return test_hls_stream(
+                segment_url,
+                depth + 1,
+                deadline
+            )
+
+        is_ts = (
+            content[:1] == b"G"
+        )
+
+        is_fmp4 = (
+            content[4:8] == b"ftyp"
+        )
+
+        if not (is_ts or is_fmp4):
+            return False
 
         if len(content) < 3000:
             return False

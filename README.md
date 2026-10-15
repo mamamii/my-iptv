@@ -148,13 +148,16 @@ HTTP 200
 
 解析 m3u8 播放列表，
 取第一个分片并实际下载首块数据
-（多码率 Master 列表会自动向下解析一层）。
+（多码率 Master 列表自动向下解析，
+单个频道总耗时上限 20 秒）。
 
 判断：
 
 ```text
 HTTP 200
-且首块数据 >= 3000 字节
+首块数据 >= 3000 字节
+且内容为真实视频数据
+（TS 同步字节 0x47 或 fMP4 ftyp 头）
 ```
 
 满足条件：
@@ -178,7 +181,9 @@ HTTP 200
 ```python
 THREADS = 64
 
-HTTP_TIMEOUT = (3, 5)
+HTTP_TIMEOUT = (3, 3)
+
+PER_CHANNEL_BUDGET = 20
 
 TIME_BUDGET = 450
 
